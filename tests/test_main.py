@@ -515,12 +515,12 @@ class MainSafetyTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            self.run_main(["--undo"], manifest_dir, answer="no")
+            self.run_main(["-u"], manifest_dir, answer="no")
             first_undo = json.loads(newer.read_text(encoding="utf-8"))
             self.assertEqual(first_undo["undo_status"], "completed")
             self.assertNotIn("undo_status", json.loads(older.read_text()))
 
-            self.run_main(["--undo"], manifest_dir, answer="no")
+            self.run_main(["-u"], manifest_dir, answer="no")
             second_undo = json.loads(older.read_text(encoding="utf-8"))
             self.assertEqual(second_undo["undo_status"], "partial")
 
@@ -555,6 +555,23 @@ class MainSafetyTests(unittest.TestCase):
             self.assertNotIn("config/entity_registry/update", sent_types)
             self.assertFalse(manifest_dir.exists())
 
+    def test_renamed_grouping_and_inspection_flags_are_accepted(self):
+        for args in (["--dry-run", "--by-kind"], ["--kinds"], ["--platforms"]):
+            with self.subTest(args=args), tempfile.TemporaryDirectory() as directory:
+                send_mock, _ = self.run_main(args, Path(directory))
+                self.assertTrue(send_mock.await_count)
+
+    def test_short_prefix_keep_dry_run_and_group_flags(self):
+        with tempfile.TemporaryDirectory() as directory:
+            send_mock, output = self.run_main(
+                ["-n", "-g", "-p", "ix_", "-k", "temperature"],
+                Path(directory))
+
+        self.assertIn("Group 1 of 1 | 1 container(s), 1 entities", output)
+        self.assertNotIn("config/entity_registry/update", [
+            call.args[2]["type"] for call in send_mock.await_args_list
+        ])
+
     def test_kept_sample_reports_how_many_entities_are_omitted(self):
         entities = [
             {
@@ -580,7 +597,7 @@ class MainSafetyTests(unittest.TestCase):
         }
         update_requests = []
 
-        for args in (["--yes"], ["--enable-kept", "--yes"]):
+        for args in (["--yes"], ["--enable-kept", "--yes"], ["-e", "-y"]):
             with self.subTest(args=args), tempfile.TemporaryDirectory() as directory:
                 manifest_dir = Path(directory) / "manifests"
                 with patch.dict("os.environ", {"HA_KEEP": "health"}):
@@ -592,8 +609,9 @@ class MainSafetyTests(unittest.TestCase):
                 ])
 
         self.assertEqual(update_requests[0], [])
-        self.assertEqual(len(update_requests[1]), 1)
-        self.assertEqual(update_requests[1][0]["disabled_by"], None)
+        for requests in update_requests[1:]:
+            self.assertEqual(len(requests), 1)
+            self.assertIsNone(requests[0]["disabled_by"])
 
     def test_declined_confirmation_never_updates_or_writes_manifest(self):
         with tempfile.TemporaryDirectory() as directory:

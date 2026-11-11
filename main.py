@@ -19,7 +19,7 @@ One-off maintenance script. Requires: pip install -r requirements.txt
 
 Usage:
   # see what entity name patterns exist for ix-* before deciding:
-  python main.py --dry-run --list-suffixes
+    python main.py --dry-run --kinds
 
   # preview what would be disabled (disables nothing):
   python main.py --dry-run
@@ -28,10 +28,10 @@ Usage:
   python main.py --dry-run --keep out_of_memory,health
 
   # preview with containers grouped by identical sensor sets:
-  python main.py --dry-run --group --keep out_of_memory
+    python main.py --dry-run --by-kind --keep out_of_memory
 
   # diagnose zero-match problems (dump platform names + sample ids):
-  python main.py --list-platforms
+    python main.py --platforms
 
   # use a different container prefix:
   python main.py --dry-run --prefix app_
@@ -421,36 +421,34 @@ async def connect_and_auth():
 
 async def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prefix", default=None,
+    parser.add_argument("-p", "--prefix", default=None,
                         help="entity-id prefix identifying managed containers "
                              f"(env HA_PREFIX, default {DEFAULT_PREFIX}; use "
                              "the UNDERSCORE form, e.g. ix_ not ix-; pass an "
                              'empty string "" to target ALL portainer '
                              "entities)")
-    parser.add_argument("--keep", default=None,
+    parser.add_argument("-k", "--keep", default=None,
                         help="comma-separated entity_id substrings to keep; "
                              "matching entities are NOT disabled (env HA_KEEP, "
                              "default none — all targeted entities are "
                              "disabled)")
-    parser.add_argument("--dry-run", action="store_true",
+    parser.add_argument("-n", "--dry-run", action="store_true",
                         help="preview what would be disabled/enabled; "
                              "change nothing")
-    parser.add_argument("--yes", action="store_true",
+    parser.add_argument("-y", "--yes", action="store_true",
                         help="confirm registry changes without prompting")
-    parser.add_argument("--group", action="store_true",
-                        help="group dry-run output: containers with identical "
-                             "sensor sets are listed together (disable, keep "
-                             "and enable lists all shown)")
-    parser.add_argument("--enable-kept", action="store_true",
+    parser.add_argument("-g", "--by-kind", action="store_true",
+                        help="group dry-run output by identical entity-kind "
+                             "sets (disable, keep and enable lists)")
+    parser.add_argument("-e", "--enable-kept", action="store_true",
                         help="also ENABLE kept entities that are currently "
                              "disabled in the registry (sets disabled_by=None)")
-    parser.add_argument("--list-suffixes", action="store_true",
-                        help="show what entity kinds exist for prefixed "
-                             "containers; run this FIRST to refine --keep")
-    parser.add_argument("--list-platforms", action="store_true",
+    parser.add_argument("--kinds", action="store_true",
+                        help="show entity-kind counts for targeted containers")
+    parser.add_argument("--platforms", action="store_true",
                         help="dump platform names and sample entity ids from "
                              "the registry (diagnoses zero-match problems)")
-    parser.add_argument("--undo", nargs="?", const="__latest__",
+    parser.add_argument("-u", "--undo", nargs="?", const="__latest__",
                         metavar="MANIFEST",
                         help="restore a manifest; omit MANIFEST to use the "
                              "newest unfinished recovery manifest")
@@ -460,8 +458,7 @@ async def main() -> None:
     args = parser.parse_args()
 
     if args.undo is not None and any([
-            args.dry_run, args.enable_kept, args.list_suffixes,
-            args.list_platforms]):
+            args.dry_run, args.enable_kept, args.kinds, args.platforms]):
         raise SystemExit("--undo cannot be combined with other modes.")
     if args.delete_manifest and args.undo is None:
         raise SystemExit("--delete-manifest requires --undo.")
@@ -588,7 +585,7 @@ async def main() -> None:
         entities = resp["result"]
         print(f"Registry loaded: {len(entities)} entities total.")
 
-        if args.list_platforms:
+        if args.platforms:
             platforms = Counter(e.get("platform") for e in entities)
             print("Platforms seen in registry:")
             for plat, n in platforms.most_common(40):
@@ -618,14 +615,14 @@ async def main() -> None:
 
         if not portainer:
             print("WARNING: no entities with platform == 'portainer' found. "
-                  "Re-run with --list-platforms to see actual platform names.")
+                  "Re-run with --platforms to see actual platform names.")
         if portainer and not targeted:
             print(f"WARNING: portainer entities found but none start with "
                   f"'{prefix}'. Sample portainer entity ids:")
             for e in [x["entity_id"] for x in portainer][:10]:
                 print(" ", e)
 
-        if args.list_suffixes:
+        if args.kinds:
             counts = Counter(e["_kind"] for e in targeted)
             print(f"{len(targeted)} {scope_label} portainer entities; "
                   "kind counts:")
@@ -658,7 +655,7 @@ async def main() -> None:
 
         if args.dry_run:
             by_id = lambda e: e["entity_id"]
-            if args.group:
+            if args.by_kind:
                 print("\n--- WOULD DISABLE (grouped by identical sensor set) ---")
                 print_shape_grouped(targets, "disable")
                 if kept:

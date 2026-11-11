@@ -122,13 +122,13 @@ Dry runs do not modify Home Assistant.
 
 ```bash
 # Inspect the entity kinds in scope:
-python main.py --dry-run --list-suffixes
+python main.py --dry-run --kinds
 
 # Preview what would change, preserving OOM and health entities:
 python main.py --dry-run --keep out_of_memory,health
 
 # Diagnose zero-match problems (dump platform names + sample ids):
-python main.py --list-platforms
+python main.py --platforms
 
 # Execute the reviewed changes; you'll be asked to confirm:
 python main.py --keep out_of_memory,health --enable-kept
@@ -196,19 +196,19 @@ look stale, reload the UI or restart Home Assistant.
 
 ## Command reference
 
-| Flag                | Purpose                                                                                                           |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `--prefix p`        | Entity-ID prefix identifying managed containers (env `HA_PREFIX`, default `ix_`; `""` = all Portainer entities)   |
-| `--keep a,b,c`      | Comma-separated entity-ID substrings to keep (env `HA_KEEP`, default: none — disable all targeted)                |
-| `--dry-run`         | Preview only; change nothing                                                                                      |
-| `--yes`             | Confirm registry changes without an interactive prompt                                                            |
-| `--group`           | Group dry-run output: containers with identical sensor sets listed together; shows disable, keep and enable lists |
-| `--enable-kept`     | Execute mode also enables kept-but-disabled entities                                                              |
-| `--undo [MANIFEST]` | Restore a manifest; without a path, use the newest unfinished run                                                 |
-| `--delete-manifest` | Delete the manifest after a fully successful undo; requires `--undo`                                              |
-| `--list-suffixes`   | Histogram of entity kinds on prefixed containers                                                                  |
-| `--list-platforms`  | Histogram of platform names/sample IDs on ix-\* containers (used for debugging)                                   |
-| `--help`            | Show all flags with descriptions                                                                                  |
+| Flag                    | Purpose                                                                                                         |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `-p, --prefix p`        | Entity-ID prefix identifying managed containers (env `HA_PREFIX`, default `ix_`; `""` = all Portainer entities) |
+| `-k, --keep a,b,c`      | Comma-separated entity-ID substrings to keep (env `HA_KEEP`, default: none — disable all targeted)              |
+| `-n, --dry-run`         | Preview only; change nothing                                                                                    |
+| `-y, --yes`             | Confirm registry changes without an interactive prompt                                                          |
+| `-g, --by-kind`         | Group dry-run output by identical entity-kind sets                                                              |
+| `-e, --enable-kept`     | Execute mode also enables kept-but-disabled entities                                                            |
+| `-u, --undo [MANIFEST]` | Restore a manifest; without a path, use the newest unfinished run                                               |
+| `--delete-manifest`     | Delete the manifest after a fully successful undo; requires `--undo`                                            |
+| `--kinds`               | Show entity-kind counts for targeted containers                                                                 |
+| `--platforms`           | Show integration platform names and sample entity IDs for debugging                                             |
+| `-h, --help`            | Show all flags with descriptions                                                                                |
 
 ## Tests
 
@@ -242,7 +242,7 @@ Assistant.
   entity IDs use underscores (`ix_adguard_home_...`); the script matches the
   underscore prefix. Container/kind splitting uses the owning device's
   registry name, so unusual container names are handled correctly.
-- `--dry-run` output is truncated in flat mode (first 30); `--group` shows all.
+- `--dry-run` output is truncated in flat mode (first 30); `--by-kind` shows all.
 
 ## License
 
