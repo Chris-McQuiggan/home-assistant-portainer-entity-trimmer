@@ -1,5 +1,7 @@
 # Home Assistant Portainer Entity Trimmer
 
+[![Tests](https://github.com/Chris-McQuiggan/home-assistant-portainer-entity-trimmer/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/Chris-McQuiggan/home-assistant-portainer-entity-trimmer/actions/workflows/tests.yml)
+
 A command-line tool to disable Home Assistant entities created by the Portainer
 integration. By default, it targets entities whose IDs begin with `ix_`, as
 used by TrueNAS and HexOS apps. Other integrations and non-matching Portainer
