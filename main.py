@@ -234,12 +234,14 @@ async def apply_updates(ws, msg_id_start, ops):
 
 
 def select_undo_ops(manifest_ops, current_disabled_by):
-    """Select only changes still in the state recorded as applied."""
-    restore, missing, changed = [], [], []
+    """Classify entities as restorable, missing, already restored, or changed."""
+    restore, missing, already_restored, changed = [], [], [], []
     for op in reversed(manifest_ops):
         entity_id = op["entity_id"]
         if entity_id not in current_disabled_by:
             missing.append(entity_id)
+        elif current_disabled_by[entity_id] == op["was_disabled_by"]:
+            already_restored.append(entity_id)
         elif current_disabled_by[entity_id] != op["new_disabled_by"]:
             changed.append(entity_id)
         else:
@@ -247,7 +249,34 @@ def select_undo_ops(manifest_ops, current_disabled_by):
                 "entity_id": entity_id,
                 "disabled_by": op["was_disabled_by"],
             })
-    return restore, missing, changed
+    return restore, missing, already_restored, changed
+
+
+def find_latest_undo_manifest(manifests_dir):
+    """Return the newest manifest not marked as completely undone."""
+    if not manifests_dir.exists():
+        return None
+
+    candidates = []
+    for path in manifests_dir.glob("undo-*.json"):
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"Cannot inspect undo manifest {path}: {exc}")
+        if not isinstance(manifest, dict) or not isinstance(
+                manifest.get("ops"), list):
+            raise SystemExit(f"Invalid undo manifest {path}: expected an object "
+                             "with an ops list.")
+        if manifest.get("undo_status") == "completed" or not manifest["ops"]:
+            continue
+
+        try:
+            when = datetime.datetime.fromisoformat(manifest["when"]).timestamp()
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            when = 0
+        candidates.append((when, path.stat().st_mtime, path.name, path))
+
+    return max(candidates)[-1] if candidates else None
 
 
 def confirm_mutations(assume_yes, description):
@@ -261,6 +290,34 @@ def confirm_mutations(assume_yes, description):
     if answer.strip().lower() not in {"y", "yes"}:
         raise SystemExit("Cancelled. Enter y or yes, or pass --yes to confirm "
                          "non-interactively.")
+
+
+def maybe_delete_undo_manifest(manifest_path, assume_yes, delete_requested):
+    """Offer cleanup after a clean undo; never delete implicitly with --yes."""
+    if delete_requested:
+        should_delete = True
+    elif assume_yes:
+        print("Recovery manifest retained; pass --delete-manifest to remove it "
+              "non-interactively.")
+        return False
+    else:
+        try:
+            answer = input("Undo completed successfully. Delete its recovery "
+                           "manifest? [y/N]: ")
+        except EOFError:
+            answer = ""
+        should_delete = answer.strip().lower() in {"y", "yes"}
+
+    if not should_delete:
+        print(f"Recovery manifest retained: {manifest_path}")
+        return False
+    try:
+        manifest_path.unlink()
+    except OSError as exc:
+        print(f"Could not delete recovery manifest {manifest_path}: {exc}")
+        return False
+    print(f"Deleted recovery manifest: {manifest_path}")
+    return True
 
 
 def write_manifest(path, manifest):
@@ -345,15 +402,31 @@ async def main() -> None:
     parser.add_argument("--list-platforms", action="store_true",
                         help="dump platform names and sample entity ids from "
                              "the registry (diagnoses zero-match problems)")
-    parser.add_argument("--undo", metavar="MANIFEST",
-                        help="restore entity states recorded in an undo "
-                             "manifest written by a previous execute run "
-                             "(e.g. manifests/undo-2026-11-11-063000.json)")
+    parser.add_argument("--undo", nargs="?", const="__latest__",
+                        metavar="MANIFEST",
+                        help="restore a manifest; omit MANIFEST to use the "
+                             "newest unfinished recovery manifest")
+    parser.add_argument("--delete-manifest", action="store_true",
+                        help="delete the manifest after a clean undo "
+                             "(for non-interactive use with --undo)")
     args = parser.parse_args()
 
-    if args.undo and any([args.dry_run, args.enable_kept, args.list_suffixes,
-                          args.list_platforms]):
+    if args.undo is not None and any([
+            args.dry_run, args.enable_kept, args.list_suffixes,
+            args.list_platforms]):
         raise SystemExit("--undo cannot be combined with other modes.")
+    if args.delete_manifest and args.undo is None:
+        raise SystemExit("--delete-manifest requires --undo.")
+
+    undo_manifest_path = None
+    if args.undo is not None:
+        if args.undo == "__latest__":
+            undo_manifest_path = find_latest_undo_manifest(MANIFESTS_DIR)
+            if undo_manifest_path is None:
+                raise SystemExit(f"No unfinished recovery manifests found in "
+                                 f"{MANIFESTS_DIR}.")
+        else:
+            undo_manifest_path = Path(args.undo)
 
     # Precedence: CLI flag > environment/.env > built-in default.
     # NOTE: args.prefix is checked against None (not falsy) so that an
@@ -372,8 +445,8 @@ async def main() -> None:
 
     async with await connect_and_auth() as ws:
         # ---- undo mode: restore only entities unchanged since this run ----
-        if args.undo:
-            manifest_path = Path(args.undo)
+        if args.undo is not None:
+            manifest_path = undo_manifest_path
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
@@ -407,20 +480,54 @@ async def main() -> None:
                 entity["entity_id"]: entity.get("disabled_by")
                 for entity in resp["result"]
             }
-            ops, missing, changed = select_undo_ops(
+            ops, missing, already_restored, changed = select_undo_ops(
                 manifest_ops, current_disabled_by)
             print(f"Undoing {len(ops)} of {len(manifest_ops)} change(s) from "
                   f"{manifest.get('when', '?')} ({manifest_path}).")
             if missing:
                 print(f"Skipped {len(missing)} entity(s) no longer in the registry.")
+            if already_restored:
+                print(f"Already restored: {len(already_restored)} entity(s).")
             if changed:
                 print(f"Skipped {len(changed)} entity(s) whose state changed "
                       "since this manifest was created.")
             if ops:
                 confirm_mutations(args.yes, f"Restore {len(ops)} entity state(s)?")
-            ok, failed = await apply_updates(ws, 2, ops) if ops else ([], [])
+            manifest["undo_status"] = "in_progress"
+            manifest["undo_last_attempt_at"] = datetime.datetime.now().isoformat(
+                timespec="seconds")
+            write_manifest(manifest_path, manifest)
+            try:
+                ok, failed = await apply_updates(ws, 2, ops) if ops else ([], [])
+            except (TimeoutError, OSError, WebSocketException) as exc:
+                manifest["undo_status"] = "partial"
+                manifest["undo_error"] = str(exc)
+                write_manifest(manifest_path, manifest)
+                raise SystemExit(f"Undo was interrupted: {exc}. Recovery "
+                                 f"manifest remains at {manifest_path}; retry "
+                                 "with --undo.")
+
+            undo_complete = not changed and not failed
+            manifest["undo_status"] = (
+                "completed" if undo_complete else "partial")
+            manifest.pop("undo_error", None)
+            if undo_complete:
+                manifest["undo_completed_at"] = datetime.datetime.now().isoformat(
+                    timespec="seconds")
+            else:
+                manifest.pop("undo_completed_at", None)
+            write_manifest(manifest_path, manifest)
             print(f"Restored {len(ok)}/{len(ops)} entities"
                   + (f", {len(failed)} FAILED (see above)." if failed else "."))
+            if undo_complete and not missing:
+                maybe_delete_undo_manifest(
+                    manifest_path, args.yes, args.delete_manifest)
+            elif missing:
+                print("Recovery manifest retained because some entities no "
+                      "longer exist.")
+            else:
+                print("Recovery manifest retained; resolve the remaining "
+                      "failures or changed entities and retry the undo.")
             if ok:
                 print("Changes usually appear immediately. If entities still "
                     "look stale, reload the UI or "

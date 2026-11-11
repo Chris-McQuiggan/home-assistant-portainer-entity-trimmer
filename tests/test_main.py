@@ -96,16 +96,99 @@ class UndoSelectionTests(unittest.TestCase):
              "new_disabled_by": "user"},
         ]
 
-        restore, missing, changed = main.select_undo_ops(
+        restore, missing, already_restored, changed = main.select_undo_ops(
             manifest_ops,
-            {"switch.kept": None, "sensor.modified": None},
+            {"switch.kept": None, "sensor.modified": "integration"},
         )
 
         self.assertEqual(restore, [
             {"entity_id": "switch.kept", "disabled_by": "integration"},
         ])
         self.assertEqual(missing, ["sensor.gone"])
+        self.assertEqual(already_restored, [])
         self.assertEqual(changed, ["sensor.modified"])
+
+    def test_selects_entities_already_at_their_original_state(self):
+        manifest_ops = [{
+            "entity_id": "sensor.restored",
+            "was_disabled_by": None,
+            "new_disabled_by": "user",
+        }]
+
+        restore, missing, already_restored, changed = main.select_undo_ops(
+            manifest_ops, {"sensor.restored": None})
+
+        self.assertEqual(restore, [])
+        self.assertEqual(missing, [])
+        self.assertEqual(already_restored, ["sensor.restored"])
+        self.assertEqual(changed, [])
+
+
+class UndoManifestTests(unittest.TestCase):
+    def write_manifest(self, directory, filename, when, **extra):
+        path = Path(directory) / filename
+        manifest = {"when": when, "ops": [{"entity_id": "sensor.test"}]}
+        manifest.update(extra)
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        return path
+
+    def test_finds_newest_unfinished_manifest_by_run_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.write_manifest(directory, "undo-older.json", "2026-11-11T08:00:00")
+            newest = self.write_manifest(
+                directory, "undo-newer.json", "2026-11-11T08:10:00")
+            self.write_manifest(
+                directory, "undo-finished.json", "2026-11-11T08:20:00",
+                undo_status="completed")
+            self.write_manifest(
+                directory, "undo-empty.json", "2026-11-11T08:30:00", ops=[])
+
+            self.assertEqual(main.find_latest_undo_manifest(Path(directory)), newest)
+
+    def test_returns_none_when_no_undoable_manifests_exist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.write_manifest(
+                directory, "undo-finished.json", "2026-11-11T08:20:00",
+                undo_status="completed")
+            self.write_manifest(
+                directory, "undo-empty.json", "2026-11-11T08:30:00", ops=[])
+
+            self.assertIsNone(main.find_latest_undo_manifest(Path(directory)))
+
+    def test_yes_keeps_manifest_unless_deletion_is_explicit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "undo.json"
+            manifest_path.write_text("{}", encoding="utf-8")
+
+            deleted = main.maybe_delete_undo_manifest(
+                manifest_path, assume_yes=True, delete_requested=False)
+
+            self.assertFalse(deleted)
+            self.assertTrue(manifest_path.exists())
+
+    def test_interactive_confirmation_can_delete_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "undo.json"
+            manifest_path.write_text("{}", encoding="utf-8")
+
+            with patch("builtins.input", return_value="Y"):
+                deleted = main.maybe_delete_undo_manifest(
+                    manifest_path, assume_yes=False, delete_requested=False)
+
+            self.assertTrue(deleted)
+            self.assertFalse(manifest_path.exists())
+
+    def test_delete_flag_deletes_manifest_without_prompt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "undo.json"
+            manifest_path.write_text("{}", encoding="utf-8")
+
+            with patch("builtins.input", side_effect=AssertionError("prompted")):
+                deleted = main.maybe_delete_undo_manifest(
+                    manifest_path, assume_yes=True, delete_requested=True)
+
+            self.assertTrue(deleted)
+            self.assertFalse(manifest_path.exists())
 
 
 class MutationSafetyTests(unittest.TestCase):
@@ -318,6 +401,58 @@ class MainSafetyTests(unittest.TestCase):
 
         asyncio.run(run())
         return send_mock
+
+    def test_bare_undo_walks_newest_unfinished_manifest_first(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_dir = Path(directory)
+            older = manifest_dir / "undo-older.json"
+            newer = manifest_dir / "undo-newer.json"
+            older.write_text(json.dumps({
+                "when": "2026-11-11T08:00:00",
+                "ops": [{
+                    "entity_id": "sensor.ix_demo_temperature",
+                    "was_disabled_by": "integration",
+                    "new_disabled_by": "user",
+                }],
+            }), encoding="utf-8")
+            newer.write_text(json.dumps({
+                "when": "2026-11-11T08:10:00",
+                "ops": [{
+                    "entity_id": "sensor.ix_demo_temperature",
+                    "was_disabled_by": None,
+                    "new_disabled_by": "user",
+                }],
+            }), encoding="utf-8")
+
+            self.run_main(["--undo"], manifest_dir, answer="no")
+            first_undo = json.loads(newer.read_text(encoding="utf-8"))
+            self.assertEqual(first_undo["undo_status"], "completed")
+            self.assertNotIn("undo_status", json.loads(older.read_text()))
+
+            self.run_main(["--undo"], manifest_dir, answer="no")
+            second_undo = json.loads(older.read_text(encoding="utf-8"))
+            self.assertEqual(second_undo["undo_status"], "partial")
+
+    def test_successful_undo_offers_and_deletes_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_dir = Path(directory)
+            manifest_path = manifest_dir / "undo-latest.json"
+            manifest_path.write_text(json.dumps({
+                "when": "2026-11-11T08:10:00",
+                "ops": [{
+                    "entity_id": "sensor.ix_demo_temperature",
+                    "was_disabled_by": "integration",
+                    "new_disabled_by": None,
+                }],
+            }), encoding="utf-8")
+
+            send_mock = self.run_main(
+                ["--undo"], manifest_dir, answer="yes")
+
+            self.assertFalse(manifest_path.exists())
+            self.assertIn("config/entity_registry/update", [
+                call.args[2]["type"] for call in send_mock.await_args_list
+            ])
 
     def test_dry_run_never_updates_or_writes_manifest(self):
         with tempfile.TemporaryDirectory() as directory:

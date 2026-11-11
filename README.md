@@ -148,6 +148,10 @@ updates. It includes the previous and intended state for each entity. If a run
 is interrupted, the manifest can be used to undo updates that took effect.
 
 ```bash
+# Undo the newest unfinished run. Repeat to undo runs from newest to oldest.
+python main.py --undo
+
+# Or choose a specific manifest:
 python main.py --undo manifests/undo-2026-11-11-063000-123456.json
 ```
 
@@ -156,8 +160,16 @@ Replace the example filename with the recovery manifest printed by your run.
 Before restoring, the tool checks the live registry. It skips entities that no
 longer exist or whose `disabled_by` value no longer matches the manifest's
 intended state. This is a best-effort check; Home Assistant does not make the
-check and update atomic. Undo also requires confirmation unless `--yes` is
-provided.
+check and update atomic. Entities already at their original state count as
+already undone, so retries only attempt remaining changes. Changed entities or
+failed updates leave the manifest unfinished; bare `--undo` retries that
+newest unfinished manifest instead of moving on to an older run. Missing
+entities are skipped and do not block the undo chain, but their manifest is
+kept.
+
+After a fully successful undo, the tool offers to delete the manifest. Decline
+to keep it. `--yes` confirms entity updates but does not delete the manifest;
+use `--delete-manifest` with `--undo` to request deletion non-interactively.
 
 ## Targeting options
 
@@ -181,18 +193,19 @@ look stale, reload the UI or restart Home Assistant.
 
 ## Command reference
 
-| Flag               | Purpose                                                                                                           |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `--prefix p`       | Entity-ID prefix identifying managed containers (env `HA_PREFIX`, default `ix_`; `""` = all Portainer entities)   |
-| `--keep a,b,c`     | Comma-separated entity-ID substrings to keep (env `HA_KEEP`, default: none — disable all targeted)                |
-| `--dry-run`        | Preview only; change nothing                                                                                      |
-| `--yes`            | Confirm registry changes without an interactive prompt                                                            |
-| `--group`          | Group dry-run output: containers with identical sensor sets listed together; shows disable, keep and enable lists |
-| `--enable-kept`    | Execute mode also enables kept-but-disabled entities                                                              |
-| `--undo MANIFEST`  | Restore prior states when current values still match the manifest                                                 |
-| `--list-suffixes`  | Histogram of entity kinds on prefixed containers                                                                  |
-| `--list-platforms` | Histogram of platform names/sample IDs on ix-\* containers (used for debugging)                                   |
-| `--help`           | Show all flags with descriptions                                                                                  |
+| Flag                | Purpose                                                                                                           |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `--prefix p`        | Entity-ID prefix identifying managed containers (env `HA_PREFIX`, default `ix_`; `""` = all Portainer entities)   |
+| `--keep a,b,c`      | Comma-separated entity-ID substrings to keep (env `HA_KEEP`, default: none — disable all targeted)                |
+| `--dry-run`         | Preview only; change nothing                                                                                      |
+| `--yes`             | Confirm registry changes without an interactive prompt                                                            |
+| `--group`           | Group dry-run output: containers with identical sensor sets listed together; shows disable, keep and enable lists |
+| `--enable-kept`     | Execute mode also enables kept-but-disabled entities                                                              |
+| `--undo [MANIFEST]` | Restore a manifest; without a path, use the newest unfinished run                                                 |
+| `--delete-manifest` | Delete the manifest after a fully successful undo; requires `--undo`                                              |
+| `--list-suffixes`   | Histogram of entity kinds on prefixed containers                                                                  |
+| `--list-platforms`  | Histogram of platform names/sample IDs on ix-\* containers (used for debugging)                                   |
+| `--help`            | Show all flags with descriptions                                                                                  |
 
 ## Tests
 
