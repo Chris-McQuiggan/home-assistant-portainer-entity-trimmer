@@ -140,6 +140,9 @@ environment or `.env` file.
 `--keep` contains case-insensitive substrings matched against entity IDs. If it
 is omitted or empty, all enabled entities in scope are candidates for disabling.
 `--enable-kept` also enables matching entities that are already disabled.
+Every dry run includes a `WOULD ENABLE` section for kept-but-disabled entities.
+Its heading makes clear whether `--enable-kept` was requested; without the flag,
+the section is informational and no entities will be enabled.
 
 ## Undo and recovery
 

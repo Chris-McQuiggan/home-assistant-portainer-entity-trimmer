@@ -60,6 +60,7 @@ import datetime
 import json
 import os
 import re
+import textwrap
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -86,7 +87,7 @@ def parse_keep(raw: str | None) -> list[str]:
     return [k.strip().lower() for k in (raw or "").split(",") if k.strip()]
 
 
-def select_portainer_entities(entities, prefix, keep, enable_kept):
+def select_portainer_entities(entities, prefix, keep):
     """Select targeted, kept, disable, and re-enable candidates."""
     portainer = [e for e in entities if e.get("platform") == "portainer"]
     targeted = [
@@ -101,7 +102,7 @@ def select_portainer_entities(entities, prefix, keep, enable_kept):
     kept_disabled = [
         e for e in targeted
         if is_kept(e) and e.get("disabled_by")
-    ] if enable_kept else []
+    ]
     kept = [e for e in targeted if is_kept(e)]
     return portainer, targeted, targets, kept_disabled, kept
 
@@ -184,28 +185,75 @@ def print_shape_grouped(entities, verb):
     Each unique signature (set of domain.kind) is printed once,
     followed by all container names sharing it. Small signatures first.
     """
+    if not entities:
+        print(f"  No containers to {verb}.")
+        return
+
     per_container = defaultdict(set)
     per_container_count = Counter()
-    disabled_flags = defaultdict(set)
+    non_user_disabled_flags = defaultdict(set)
     for e in entities:
         per_container[e["_cname"]].add(e["_kind"])
         per_container_count[e["_cname"]] += 1
-        if e.get("disabled_by"):
-            disabled_flags[e["_cname"]].add(e["disabled_by"])
+        disabled_by = e.get("disabled_by")
+        if disabled_by and disabled_by != "user":
+            non_user_disabled_flags[e["_cname"]].add(disabled_by)
     by_signature = defaultdict(list)
     for cname, kinds in per_container.items():
         by_signature[frozenset(kinds)].append(cname)
-    for sig in sorted(by_signature, key=lambda s: (len(s), sorted(s))):
+    signatures = sorted(by_signature, key=lambda s: (len(s), sorted(s)))
+    for group_number, sig in enumerate(signatures, 1):
         names = sorted(by_signature[sig])
         total = sum(per_container_count[n] for n in names)
-        flagged = [f"{n} (disabled_by: {', '.join(sorted(disabled_flags[n]))})"
-                   for n in names if n in disabled_flags]
-        print(f"\n  {verb} {len(names)} container(s), {total} entities — "
-              f"kinds: {', '.join(sorted(sig))}")
-        for n in names:
-            print(f"      {n}")
-        for f in flagged:
-            print(f"      {f}")
+        print(f"\n  Group {group_number} of {len(signatures)} | "
+              f"{len(names)} container(s), {total} entities")
+        kind_line = f"Kinds: {', '.join(sorted(sig))}"
+        print(textwrap.fill(kind_line, width=88,
+                            initial_indent="    ", subsequent_indent="      ",
+                            break_long_words=False, break_on_hyphens=False))
+        container_names = [
+            f"{name} [disabled_by: "
+            f"{'; '.join(sorted(non_user_disabled_flags[name]))}]"
+            if non_user_disabled_flags[name] else name
+            for name in names
+        ]
+        print(wrap_comma_separated(
+            container_names, width=88, initial_indent="    Containers: "))
+
+
+def print_would_enable(entities, grouped, enable_requested):
+    if enable_requested:
+        print("\n--- WOULD ENABLE (--enable-kept requested) ---")
+    else:
+        print("\n--- COULD ENABLE (pass --enable-kept to enable) ---")
+
+    if grouped:
+        print_shape_grouped(entities, "enable")
+    elif not entities:
+        print("  No kept-but-disabled entities.")
+    else:
+        for entity in sorted(entities, key=lambda e: e["entity_id"])[:20]:
+            verb = "would enable" if enable_requested else "could enable"
+            print(f"  {verb}:", entity["entity_id"])
+        if len(entities) > 20:
+            print(f"  ... and {len(entities) - 20} more")
+
+
+def wrap_comma_separated(items, width, initial_indent):
+    """Wrap a comma-separated list between items, never inside an item."""
+    continuation_indent = " " * len(initial_indent)
+    lines = []
+    line = initial_indent
+    for index, item in enumerate(items):
+        token = item + ("," if index < len(items) - 1 else "")
+        separator = " " if line != initial_indent else ""
+        if line != initial_indent and len(line) + len(separator) + len(token) > width:
+            lines.append(line)
+            line = continuation_indent + token
+        else:
+            line += separator + token
+    lines.append(line)
+    return "\n".join(lines)
 
 
 async def apply_updates(ws, msg_id_start, ops):
@@ -565,7 +613,7 @@ async def main() -> None:
                 dev_slug_by_id[d["id"]] = slugify(name)
 
         portainer, targeted, targets, kept_disabled, kept = (
-            select_portainer_entities(entities, prefix, keep, args.enable_kept))
+            select_portainer_entities(entities, prefix, keep))
         annotate(portainer, dev_slug_by_id, prefix)
 
         if not portainer:
@@ -597,8 +645,9 @@ async def main() -> None:
         print(f"{scope_label} portainer entities: {len(targeted)} total, "
               f"{len(kept)} kept{keep_desc}, "
               f"{len(targets)} to disable"
-              + (f", {len(kept_disabled)} kept-but-disabled to enable"
-                 if args.enable_kept else "") + ".")
+                  + (f", {len(kept_disabled)} kept-but-disabled selected to enable"
+                      if args.enable_kept else
+                      f", {len(kept_disabled)} kept-but-disabled not selected") + ".")
         if not prefix:
             print("Empty prefix: ALL portainer entities are in scope, "
                   "including non-managed containers and stacks.")
@@ -615,9 +664,7 @@ async def main() -> None:
                 if kept:
                     print("\n--- KEPT (grouped by identical sensor set) ---")
                     print_shape_grouped(kept, "keep")
-                if args.enable_kept:
-                    print("\n--- WOULD ENABLE (kept-but-disabled) ---")
-                    print_shape_grouped(kept_disabled, "enable")
+                print_would_enable(kept_disabled, True, args.enable_kept)
             else:
                 for e in sorted(targets, key=by_id)[:30]:
                     print("  would disable:", e["entity_id"])
@@ -628,16 +675,9 @@ async def main() -> None:
                     for e in sorted(kept, key=by_id)[:10]:
                         state = "DISABLED" if e.get("disabled_by") else "enabled"
                         print(f"  keeping ({state}):", e["entity_id"])
-                    if any(e.get("disabled_by") for e in kept):
-                        print("\nNote: some kept entities are disabled. "
-                              "Re-run with --enable-kept to turn them on.")
-                if args.enable_kept:
-                    print("\nKept-but-disabled to be ENABLED:")
-                    for e in sorted(kept_disabled, key=by_id)[:20]:
-                        print(f"  would enable ({e.get('disabled_by')}):",
-                              e["entity_id"])
-                    if len(kept_disabled) > 20:
-                        print(f"  ... and {len(kept_disabled) - 20} more")
+                    if len(kept) > 10:
+                        print(f"  ... and {len(kept) - 10} more")
+                print_would_enable(kept_disabled, False, args.enable_kept)
             return
 
         # ---- execute -------------------------------------------------------
@@ -651,7 +691,7 @@ async def main() -> None:
             + [{"entity_id": e["entity_id"],
                 "was_disabled_by": e.get("disabled_by"),
                 "new_disabled_by": None}
-               for e in kept_disabled]
+               for e in kept_disabled if args.enable_kept]
         )
         req_ops = [{"entity_id": op["entity_id"],
                     "disabled_by": op["new_disabled_by"]} for op in ops]

@@ -31,7 +31,7 @@ class EntitySelectionTests(unittest.TestCase):
         ]
 
         portainer, targeted, targets, kept_disabled, kept = (
-            main.select_portainer_entities(entities, "ix_", [], False))
+            main.select_portainer_entities(entities, "ix_", []))
 
         self.assertEqual(self.entity_ids(portainer), [
             "sensor.ix_app_temperature", "sensor.other_temperature",
@@ -49,9 +49,9 @@ class EntitySelectionTests(unittest.TestCase):
         ]
 
         _, custom_targets, _, _, _ = main.select_portainer_entities(
-            entities, "app_", [], False)
+            entities, "app_", [])
         _, all_portainer_targets, _, _, _ = main.select_portainer_entities(
-            entities, "", [], False)
+            entities, "", [])
 
         self.assertEqual(self.entity_ids(custom_targets), ["sensor.app_temperature"])
         self.assertEqual(self.entity_ids(all_portainer_targets), [
@@ -67,9 +67,9 @@ class EntitySelectionTests(unittest.TestCase):
         ]
 
         _, targeted, targets, kept_disabled, kept = (
-            main.select_portainer_entities(entities, "ix_", ["health"], True))
+            main.select_portainer_entities(entities, "ix_", ["health"]))
         _, _, _, not_enabled, _ = main.select_portainer_entities(
-            entities, "ix_", ["health"], False)
+            entities, "ix_", ["health"])
 
         self.assertEqual(len(targeted), 4)
         self.assertEqual(self.entity_ids(targets), ["sensor.ix_app_temperature"])
@@ -79,10 +79,98 @@ class EntitySelectionTests(unittest.TestCase):
         self.assertEqual(self.entity_ids(kept_disabled), [
             "sensor.ix_app_health_backup",
         ])
-        self.assertEqual(not_enabled, [])
+        self.assertEqual(self.entity_ids(not_enabled), [
+            "sensor.ix_app_health_backup",
+        ])
 
     def test_parse_keep_normalizes_and_ignores_empty_items(self):
         self.assertEqual(main.parse_keep(" Health, oom, ,"), ["health", "oom"])
+
+
+class GroupedOutputTests(unittest.TestCase):
+    def test_shows_group_totals_and_clean_container_names(self):
+        entities = [
+            {"_cname": "ix_alpha", "_kind": "sensor.temperature"},
+            {"_cname": "ix_alpha", "_kind": "sensor.temperature"},
+            {"_cname": "ix_beta", "_kind": "sensor.temperature",
+             "disabled_by": "user"},
+        ]
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            main.print_shape_grouped(entities, "keep")
+
+        text = output.getvalue()
+        self.assertIn("Group 1 of 1 | 2 container(s), 3 entities", text)
+        self.assertIn("Kinds: sensor.temperature", text)
+        self.assertIn("Containers: ix_alpha, ix_beta", text)
+        self.assertNotIn("disabled_by", text)
+        self.assertNotIn("entities)", text)
+
+    def test_shows_disabled_source_only_when_not_user(self):
+        entities = [
+            {"_cname": "ix_alpha", "_kind": "sensor.temperature",
+             "disabled_by": "user"},
+            {"_cname": "ix_beta", "_kind": "sensor.temperature",
+             "disabled_by": "integration"},
+        ]
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            main.print_shape_grouped(entities, "keep")
+
+        text = output.getvalue()
+        self.assertIn("Containers: ix_alpha, ix_beta [disabled_by: integration]", text)
+        self.assertNotIn("ix_alpha [disabled_by: user]", text)
+
+    def test_wraps_container_names_without_user_annotations(self):
+        entities = [
+            {"_cname": f"ix_managed_container_{index:02}",
+             "_kind": "sensor.temperature", "disabled_by": "user"}
+            for index in range(20)
+        ]
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            main.print_shape_grouped(entities, "disable")
+
+        lines = output.getvalue().splitlines()
+        self.assertTrue(any("20 container(s), 20 entities" in line for line in lines))
+        self.assertTrue(all(len(line) <= 88 for line in lines if line.strip()))
+        self.assertNotIn("disabled_by", output.getvalue())
+        for index in range(20):
+            self.assertIn(f"ix_managed_container_{index:02}", output.getvalue())
+
+    def test_empty_group_says_there_are_no_containers(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            main.print_shape_grouped([], "enable")
+
+        self.assertIn("No containers to enable.", output.getvalue())
+
+
+class WouldEnablePreviewTests(unittest.TestCase):
+    def test_flat_preview_shows_candidates_when_enable_flag_is_not_requested(self):
+        entities = [{"entity_id": "sensor.ix_app_health", "disabled_by": "user"}]
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            main.print_would_enable(entities, grouped=False, enable_requested=False)
+
+        self.assertIn("COULD ENABLE (pass --enable-kept to enable)",
+                      output.getvalue())
+        self.assertIn("could enable: sensor.ix_app_health", output.getvalue())
+
+    def test_grouped_preview_marks_enable_flag_as_requested(self):
+        entities = [{"entity_id": "sensor.ix_app_health", "disabled_by": "user",
+                     "_cname": "ix_app", "_kind": "sensor.health"}]
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            main.print_would_enable(entities, grouped=True, enable_requested=True)
+
+        self.assertIn("WOULD ENABLE (--enable-kept requested)", output.getvalue())
+        self.assertIn("Group 1 of 1 | 1 container(s), 1 entities", output.getvalue())
 
 
 class UndoSelectionTests(unittest.TestCase):
@@ -368,16 +456,18 @@ class MainSafetyTests(unittest.TestCase):
         async def __aexit__(self, exc_type, exc_value, traceback):
             return False
 
-    def run_main(self, args, manifest_dir, answer="no"):
-        entity = {
+    def run_main(self, args, manifest_dir, answer="no", entity=None,
+                 entities=None):
+        if entities is None:
+            entities = [entity or {
             "entity_id": "sensor.ix_demo_temperature",
             "platform": "portainer",
             "disabled_by": None,
-        }
+            }]
 
         async def fake_send(_ws, _msg_id, payload):
             if payload["type"] == "config/entity_registry/list":
-                return {"success": True, "result": [entity]}
+                return {"success": True, "result": entities}
             if payload["type"] == "config/device_registry/list":
                 return {"success": True, "result": []}
             if payload["type"] == "config/entity_registry/update":
@@ -385,6 +475,7 @@ class MainSafetyTests(unittest.TestCase):
             raise AssertionError(f"Unexpected request: {payload}")
 
         send_mock = AsyncMock(side_effect=fake_send)
+        output = io.StringIO()
 
         async def run():
             with (
@@ -395,12 +486,12 @@ class MainSafetyTests(unittest.TestCase):
                 patch.object(main, "send", new=send_mock),
                 patch("sys.argv", ["main.py", *args]),
                 patch("builtins.input", return_value=answer),
-                redirect_stdout(io.StringIO()),
+                redirect_stdout(output),
             ):
                 await main.main()
 
         asyncio.run(run())
-        return send_mock
+        return send_mock, output.getvalue()
 
     def test_bare_undo_walks_newest_unfinished_manifest_first(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -446,7 +537,7 @@ class MainSafetyTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            send_mock = self.run_main(
+            send_mock, _ = self.run_main(
                 ["--undo"], manifest_dir, answer="yes")
 
             self.assertFalse(manifest_path.exists())
@@ -458,11 +549,51 @@ class MainSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             manifest_dir = Path(directory) / "manifests"
 
-            send_mock = self.run_main(["--dry-run"], manifest_dir)
+            send_mock, _ = self.run_main(["--dry-run"], manifest_dir)
 
             sent_types = [call.args[2]["type"] for call in send_mock.await_args_list]
             self.assertNotIn("config/entity_registry/update", sent_types)
             self.assertFalse(manifest_dir.exists())
+
+    def test_kept_sample_reports_how_many_entities_are_omitted(self):
+        entities = [
+            {
+                "entity_id": f"sensor.ix_demo_health_{index:02}",
+                "platform": "portainer",
+                "disabled_by": None,
+            }
+            for index in range(12)
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            _, output = self.run_main(
+                ["--dry-run", "--keep", "health"], Path(directory),
+                entities=entities)
+
+        self.assertIn("Kept (sample):", output)
+        self.assertIn("... and 2 more", output)
+
+    def test_enable_candidates_are_only_updated_with_enable_kept_flag(self):
+        entity = {
+            "entity_id": "sensor.ix_demo_health",
+            "platform": "portainer",
+            "disabled_by": "user",
+        }
+        update_requests = []
+
+        for args in (["--yes"], ["--enable-kept", "--yes"]):
+            with self.subTest(args=args), tempfile.TemporaryDirectory() as directory:
+                manifest_dir = Path(directory) / "manifests"
+                with patch.dict("os.environ", {"HA_KEEP": "health"}):
+                    send_mock, _ = self.run_main(
+                        args, manifest_dir, entity=entity)
+                update_requests.append([
+                    call.args[2] for call in send_mock.await_args_list
+                    if call.args[2]["type"] == "config/entity_registry/update"
+                ])
+
+        self.assertEqual(update_requests[0], [])
+        self.assertEqual(len(update_requests[1]), 1)
+        self.assertEqual(update_requests[1][0]["disabled_by"], None)
 
     def test_declined_confirmation_never_updates_or_writes_manifest(self):
         with tempfile.TemporaryDirectory() as directory:
