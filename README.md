@@ -176,8 +176,8 @@ python main.py --dry-run --prefix ""
 ```
 
 Use this broad mode with care. The dry run prints a warning. After executing,
-reload the Portainer integration or restart Home Assistant for registry changes
-to take effect.
+changes should normally appear without a reload or restart. If entities still
+look stale, reload the UI or restart Home Assistant.
 
 ## Command reference
 
@@ -209,8 +209,9 @@ Assistant.
 
 - **New containers**: future apps on the managed host get fresh, enabled
   entities. Re-run the script after adding apps.
-- **Restart needed**: registry changes take effect after reload/restart;
-  counts in HA's UI may lag behind until then.
+- **Refresh behavior**: registry changes normally appear without a restart,
+  though UI counts may lag. If entities still look stale, reload the UI or
+  restart Home Assistant.
 - **Recovery**: `--undo` restores prior state only for entities whose current
   values still match the manifest. Entities can also be re-enabled in Home
   Assistant under **Settings → Devices & services → Entities**.

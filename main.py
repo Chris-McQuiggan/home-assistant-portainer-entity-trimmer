@@ -422,7 +422,9 @@ async def main() -> None:
             print(f"Restored {len(ok)}/{len(ops)} entities"
                   + (f", {len(failed)} FAILED (see above)." if failed else "."))
             if ok:
-                print("Reload the portainer integration or restart HA to apply.")
+                print("Changes usually appear immediately. If entities still "
+                    "look stale, reload the UI or "
+                    "restart Home Assistant.")
             return
 
         # ---- normal modes --------------------------------------------------
@@ -566,8 +568,8 @@ async def main() -> None:
               + (f", {len(failed)} FAILED (listed above)." if failed else "."))
         print(f"Undo manifest written: {manifest_path} "
               f"(revert with: python main.py --undo {manifest_path})")
-        print("Restart HA (or reload the portainer integration) for all "
-              "registry changes to take effect.")
+        print("Changes usually appear immediately. If entities still look "
+              "stale, reload the UI or restart Home Assistant.")
 
 
 if __name__ == "__main__":
