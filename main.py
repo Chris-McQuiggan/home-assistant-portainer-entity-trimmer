@@ -52,6 +52,8 @@ Env vars (also read from a .env file in the project folder — see .env.example)
   HA_TOKEN    long-lived access token (Profile -> Security -> Long-lived access tokens)
   HA_PREFIX   optional, same as --prefix (empty is only possible via the CLI flag)
   HA_KEEP     optional, comma-separated, same as --keep
+  HA_CONNECT_TIMEOUT_S   optional positive integer; default 10
+  HA_RESPONSE_TIMEOUT_S  optional positive integer; default 30
 """
 
 import argparse
@@ -76,8 +78,24 @@ HA_TOKEN = os.environ.get("HA_TOKEN", "")
 # (binary_sensor.ix_adguard_home_...). Match on the underscore form.
 DEFAULT_PREFIX = "ix_"
 DEFAULT_KEEP: list[str] = []  # entity_id substrings to keep; empty = disable all
-CONNECT_TIMEOUT_S = 10   # seconds to wait for the WebSocket connection
-RESPONSE_TIMEOUT_S = 30  # seconds to wait for a WebSocket response
+
+
+def parse_timeout(value, name, default):
+    if value is None:
+        return default
+    try:
+        seconds = int(value)
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be a positive integer number of seconds.") from exc
+    if seconds < 1:
+        raise SystemExit(f"{name} must be a positive integer number of seconds.")
+    return seconds
+
+
+CONNECT_TIMEOUT_S = parse_timeout(
+    os.environ.get("HA_CONNECT_TIMEOUT_S"), "HA_CONNECT_TIMEOUT_S", 10)
+RESPONSE_TIMEOUT_S = parse_timeout(
+    os.environ.get("HA_RESPONSE_TIMEOUT_S"), "HA_RESPONSE_TIMEOUT_S", 30)
 PROGRESS_EVERY = 200     # print progress during execute every N updates
 MANIFESTS_DIR = Path("manifests")  # undo manifests are written here (gitignored)
 

@@ -10,6 +10,21 @@ from unittest.mock import AsyncMock, patch
 import main
 
 
+class TimeoutConfigurationTests(unittest.TestCase):
+    def test_timeout_uses_default_when_unset(self):
+        self.assertEqual(main.parse_timeout(None, "HA_TEST_TIMEOUT", 12), 12)
+
+    def test_timeout_accepts_positive_integer_seconds(self):
+        self.assertEqual(main.parse_timeout("45", "HA_TEST_TIMEOUT", 12), 45)
+
+    def test_timeout_rejects_non_integer_and_non_positive_values(self):
+        for value in ("", "fast", "1.5", "0", "-3"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                        SystemExit, "HA_TEST_TIMEOUT.*positive integer"):
+                    main.parse_timeout(value, "HA_TEST_TIMEOUT", 12)
+
+
 class EntitySelectionTests(unittest.TestCase):
     @staticmethod
     def entity(entity_id, platform="portainer", disabled_by=None):

@@ -90,12 +90,14 @@ cp .env.example .env        # Windows: copy .env.example .env
 
 Then edit `.env`:
 
-| Variable    | Purpose                                      | Default                                       |
-| ----------- | -------------------------------------------- | --------------------------------------------- |
-| `HA_WS_URL` | WebSocket endpoint of your HA instance       | `ws://homeassistant.local:8123/api/websocket` |
-| `HA_TOKEN`  | Long-lived access token (required)           | —                                             |
-| `HA_PREFIX` | Entity-ID prefix of managed containers       | `ix_`                                         |
-| `HA_KEEP`   | Comma-separated entity-ID substrings to keep | _(none)_                                      |
+| Variable                | Purpose                                      | Default                                       |
+| ----------------------- | -------------------------------------------- | --------------------------------------------- |
+| `HA_WS_URL`             | WebSocket endpoint of your HA instance       | `ws://homeassistant.local:8123/api/websocket` |
+| `HA_TOKEN`              | Long-lived access token (required)           | —                                             |
+| `HA_PREFIX`             | Entity-ID prefix of managed containers       | `ix_`                                         |
+| `HA_KEEP`               | Comma-separated entity-ID substrings to keep | _(none)_                                      |
+| `HA_CONNECT_TIMEOUT_S`  | WebSocket connection timeout in seconds      | `10`                                          |
+| `HA_RESPONSE_TIMEOUT_S` | Timeout per WebSocket response in seconds    | `30`                                          |
 
 - `HA_WS_URL`: use the same hostname as your Home Assistant browser URL, with
   `/api/websocket` appended. Use `ws://` for HTTP or `wss://` for HTTPS, and
@@ -111,11 +113,14 @@ Then edit `.env`:
   `--prefix ""`.
 - `HA_KEEP`: e.g. `HA_KEEP=out_of_memory,health`. Empty means ALL prefixed
   entities are disabled.
+- `HA_CONNECT_TIMEOUT_S` and `HA_RESPONSE_TIMEOUT_S`: optional positive whole
+  numbers of seconds. Increase them if your Home Assistant instance responds
+  slowly or is reached over a high-latency connection.
 
-Every value can also be set via a CLI flag (`--prefix`, `--keep`), which
-overrides the `.env`/environment value for that run. Alternatively, export the
-variables in your shell (`export HA_TOKEN=...` / `$env:HA_TOKEN = "..."`)
-instead of using a `.env` file — both work.
+`--prefix` and `--keep` override their environment values for a single run.
+Timeouts are configured through the environment or `.env` file. You can also
+export variables in your shell (`export HA_TOKEN=...` /
+`$env:HA_TOKEN = "..."`) instead of using a `.env` file.
 
 ## Quick start
 
